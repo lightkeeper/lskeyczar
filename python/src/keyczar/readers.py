@@ -24,6 +24,7 @@ import os
 
 import errors
 import keydata
+import keyinfo
 import keys
 import util
 
@@ -115,6 +116,29 @@ class FileReader(Reader):
     if os.path.exists(location):
       result = FileReader(location)
     return result
+
+class StaticKeyReader(Reader):
+  """Reader that returns a static key"""
+
+  def __init__(self, key, purpose):
+    self._key = key
+    self._meta = keydata.KeyMetadata("Imported", purpose, key.type)
+    self._meta.AddVersion(keydata.KeyVersion(1, keyinfo.PRIMARY, False))
+
+  def GetMetadata(self):
+    return str(self._meta)
+
+  def GetKey(self, version_number):
+    return str(self._key)
+
+  def Close(self):
+    # Nothing to close - util.ReadFile() closes it
+    return
+
+  @classmethod
+  def CreateReader(cls, location):
+    # cannot be instantiated
+    return
 
 class EncryptedReader(Reader):
   """Reader that reads encrypted key data from files."""

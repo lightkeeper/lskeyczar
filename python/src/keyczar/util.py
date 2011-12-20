@@ -21,8 +21,14 @@ Utility functions for keyczar package.
 """
 
 import base64
+import cPickle
+import functools
 import math
 import os
+import warnings
+import codecs
+import struct
+
 try:
   # Import hashlib if Python >= 2.5
   from hashlib import sha1
@@ -31,6 +37,20 @@ except ImportError:
 
 import os.path
 import sys
+
+try:
+  # check for presence of blocking I/O module
+  from io import BlockingIOError
+except ImportError:
+  class BlockingIOError(IOError):
+
+    """Exception raised when I/O would block on a non-blocking I/O stream."""
+
+    def __init__(self, errno, strerror, characters_written=0):
+      super(IOError, self).__init__(errno, strerror)
+      if not isinstance(characters_written, (int, long)):
+        raise TypeError("characters_written must be a integer")
+      self.characters_written = characters_written
 
 from pyasn1.codec.der import decoder
 from pyasn1.codec.der import encoder
@@ -72,6 +92,9 @@ DSA_PARAMS = ['p', 'q', 'g']  # only algorithm params, not public/private keys
 SHA1RSA_OID = univ.ObjectIdentifier('1.2.840.113549.1.1.5')
 SHA1_OID = univ.ObjectIdentifier('1.3.14.3.2.26')
 
+# the standard buffer size for streaming
+DEFAULT_STREAM_BUFF_SIZE = 4096
+
 def ASN1Sequence(*vals):
   seq = univ.Sequence()
   for i in range(len(vals)):
@@ -96,7 +119,7 @@ def ParseASN1Sequence(seq):
 #
 #Attributes ::= SET OF Attribute
 def ParsePkcs8(pkcs8):
-  seq = ParseASN1Sequence(decoder.decode(Decode(pkcs8))[0])
+  seq = ParseASN1Sequence(decoder.decode(Base64WSDecode(pkcs8))[0])
   if len(seq) != 3:  # need three fields in PrivateKeyInfo
     raise errors.KeyczarError("Illegal PKCS8 String.")
   version = int(seq[0])
@@ -129,7 +152,7 @@ def ExportRsaPkcs8(params):
     key.setComponentByPosition(i+1, univ.Integer(params[RSA_PARAMS[i]]))
   octkey = encoder.encode(key)
   seq = ASN1Sequence(univ.Integer(0), oid, univ.OctetString(octkey))
-  return Encode(encoder.encode(seq))
+  return Base64WSEncode(encoder.encode(seq))
 
 def ExportDsaPkcs8(params):
   alg_params = univ.Sequence()
@@ -138,14 +161,14 @@ def ExportDsaPkcs8(params):
   oid = ASN1Sequence(DSA_OID, alg_params)
   octkey = encoder.encode(univ.Integer(params['x']))
   seq = ASN1Sequence(univ.Integer(0), oid, univ.OctetString(octkey))
-  return Encode(encoder.encode(seq))
+  return Base64WSEncode(encoder.encode(seq))
 
 #NOTE: not full X.509 certificate, just public key info
 #SubjectPublicKeyInfo  ::=  SEQUENCE  {
 #        algorithm            AlgorithmIdentifier,
 #        subjectPublicKey     BIT STRING  }
 def ParseX509(x509):
-  seq = ParseASN1Sequence(decoder.decode(Decode(x509))[0])
+  seq = ParseASN1Sequence(decoder.decode(Base64WSDecode(x509))[0])
   if len(seq) != 2:  # need two fields in SubjectPublicKeyInfo
     raise errors.KeyczarError("Illegal X.509 String.")
   [oid, alg_params] = ParseASN1Sequence(seq[0])
@@ -171,7 +194,7 @@ def ExportRsaX509(params):
   binkey = BytesToBin(encoder.encode(key))
   pubkey = univ.BitString("'%s'B" % binkey)  # needs to be a BIT STRING
   seq = ASN1Sequence(oid, pubkey)
-  return Encode(encoder.encode(seq))
+  return Base64WSEncode(encoder.encode(seq))
 
 def ExportDsaX509(params):
   alg_params = ASN1Sequence(univ.Integer(params['p']),
@@ -181,7 +204,7 @@ def ExportDsaX509(params):
   binkey = BytesToBin(encoder.encode(univ.Integer(params['y'])))
   pubkey = univ.BitString("'%s'B" % binkey)  # needs to be a BIT STRING
   seq = ASN1Sequence(oid, pubkey)
-  return Encode(encoder.encode(seq))
+  return Base64WSEncode(encoder.encode(seq))
 
 def MakeDsaSig(r, s):
   """
@@ -229,7 +252,7 @@ def MakeEmsaMessage(msg, modulus_size):
 def BinToBytes(bits):
   """Convert bit string to byte string."""
   bits = _PadByte(bits)
-  octets = [bits[8*i:8*(i+1)] for i in range(len(bits)/8)]
+  octets = [bits[8 * i:8 * (i + 1)] for i in range(len(bits) / 8)]
   return "".join([chr(int(x, 2)) for x in octets])
 
 def BytesToBin(byte_string):
@@ -239,15 +262,15 @@ def BytesToBin(byte_string):
 def _PadByte(bits):
   """Pad a string of bits with zeros to make its length a multiple of 8."""
   r = len(bits) % 8
-  return ((8-r) % 8)*'0' + bits
+  return ((8 - r) % 8) * '0' + bits
 
 def IntToBin(n):
   if n == 0 or n == 1:
     return str(n)
   elif n % 2 == 0:
-    return IntToBin(n/2) + "0"
+    return IntToBin(n / 2) + "0"
   else:
-    return IntToBin(n/2) + "1"
+    return IntToBin(n / 2) + "1"
 
 def BigIntToBytes(n):
   """Return a big-endian byte string representation of an arbitrary length n."""
@@ -312,48 +335,56 @@ def PrefixHash(*inputs):
     md.update(i)
   return md.digest()
 
+# Struct packed byte array format specifiers used below
+BIG_ENDIAN_INT_SPECIFIER = ">i"
+STRING_SPECIFIER = "s"
 
-def Encode(s):
+def PackByteArray(array):
   """
-  Return Base64 encoding of s. Suppress padding characters (=).
-
-  Uses URL-safe alphabet: - replaces +, _ replaces /. Will convert s of type
-  unicode to string type first.
-
-  @param s: string to encode as Base64
-  @type s: string
-
-  @return: Base64 representation of s.
-  @rtype: string
+  Packs the given array into a structure composed of a four-byte, big-endian
+  integer containing the array length, followed by the array contents.
   """
-  return base64.urlsafe_b64encode(str(s)).replace("=", "")
+  if not array:
+    return ''
+  array_length_header = struct.pack(BIG_ENDIAN_INT_SPECIFIER, len(array))
+  return array_length_header + array
 
-
-def Decode(s):
+def PackMultipleByteArrays(*arrays):
   """
-  Return decoded version of given Base64 string. Ignore whitespace.
-
-  Uses URL-safe alphabet: - replaces +, _ replaces /. Will convert s of type
-  unicode to string type first.
-
-  @param s: Base64 string to decode
-  @type s: string
-
-  @return: original string that was encoded as Base64
-  @rtype: string
-
-  @raise Base64DecodingError: If length of string (ignoring whitespace) is one
-    more than a multiple of four.
+  Packs the provided variable number of byte arrays into one array.  The
+  returned array is prefixed with a count of the arrays contained, in a
+  four-byte big-endian integer, followed by the arrays in sequence, each
+  length-prefixed by PackByteArray().
   """
-  s = str(s.replace(" ", ""))  # kill whitespace, make string (not unicode)
-  d = len(s) % 4
-  if d == 1:
-    raise errors.Base64DecodingError()
-  elif d == 2:
-    s += "=="
-  elif d == 3:
-    s += "="
-  return base64.urlsafe_b64decode(s)
+  array_count_header = struct.pack(BIG_ENDIAN_INT_SPECIFIER, len(arrays))
+  array_contents = ''.join([PackByteArray(a) for a in arrays])
+  return array_count_header + array_contents
+
+def UnpackByteArray(data, offset):
+  """
+  Unpacks a length-prefixed byte array packed by PackByteArray() from 'data',
+  starting from position 'offset'.  Returns a tuple of the data array and the
+  offset of the first byte after the end of the extracted array.
+  """
+  array_len = struct.unpack(BIG_ENDIAN_INT_SPECIFIER, 
+                            data[offset:offset + 4])[0]
+  offset += 4
+  return data[offset:offset + array_len], offset + array_len
+
+def UnpackMultipleByteArrays(data):
+  """
+  Extracts and returns a list of byte arrays that were packed by
+  PackMultipleByteArrays().
+  """
+  # The initial integer containing the number of byte arrays that follow is
+  # redundant.  We just skip it.
+  position = 4
+  result = []
+  while position < len(data):
+    array, position = UnpackByteArray(data, position)
+    result.append(array)
+  assert position == len(data)
+  return result
 
 def WriteFile(data, loc):
   """
@@ -435,4 +466,422 @@ def ImportBackends():
   """
   ImportAll('backends')
 
+def Base64WSEncode(s):
+  """
+  Return Base64 web safe encoding of s. Suppress padding characters (=).
 
+  Uses URL-safe alphabet: - replaces +, _ replaces /. Will convert s of type
+  unicode to string type first.
+
+  @param s: string to encode as Base64
+  @type s: string
+
+  @return: Base64 representation of s.
+  @rtype: string
+  """
+  return base64.urlsafe_b64encode(str(s)).replace("=", "")
+
+def Encode(s):
+  warnings.warn('Encode() is deprecated, use Base64WSEncode() instead',
+               DeprecationWarning)
+  return Base64WSEncode(s)
+
+def Base64WSDecode(s):
+  """
+  Return decoded version of given Base64 string. Ignore whitespace.
+
+  Uses URL-safe alphabet: - replaces +, _ replaces /. Will convert s of type
+  unicode to string type first.
+
+  @param s: Base64 string to decode
+  @type s: string
+
+  @return: original string that was encoded as Base64
+  @rtype: string
+
+  @raise Base64DecodingError: If length of string (ignoring whitespace) is one
+    more than a multiple of four.
+  """
+  s = ''.join(s.splitlines())
+  s = str(s.replace(" ", ""))  # kill whitespace, make string (not unicode)
+  d = len(s) % 4
+  if d == 1:
+    raise errors.Base64DecodingError()
+  elif d == 2:
+    s += "=="
+  elif d == 3:
+    s += "="
+  try:
+    return base64.urlsafe_b64decode(s)
+  except TypeError:
+    # Decoding raises TypeError if s contains invalid characters.
+    raise errors.Base64DecodingError()
+
+def Decode(s):
+  warnings.warn('Decode() is deprecated, use Base64WSDecode() instead', 
+                DeprecationWarning)
+  return Base64WSDecode(s)
+
+class BufferedIncrementalBase64WSEncoder(codecs.BufferedIncrementalEncoder):
+
+  """
+  Web-safe Base64 encodes an input in multiple steps. Each step bar the final
+  one will be sized to ensure no Base64 padding is required. Any unencoded data
+  outside this optimal size will be buffered.
+  """
+
+  def _buffer_encode(self, input, errors, final):
+    """
+    Encodes input and returns the resulting object, buffering any data that is
+    beyond the optimal no-padding length unless final is True
+    Implementation of abstract method in parent.
+
+    @param input: string to encode as Base64
+    @type input: string
+
+    @param errors: required error handling scheme (see
+    IncrementalBase64WSStreamWriter)
+
+    @param final: force all data to be encoded, possibly resulting in padding
+    #type final: boolean
+
+    @return: (Base64 representation of input, length consumed)
+    @rtype: tuple
+    """
+    # Overwrite this method in subclasses: It must encode input
+    # and return an (output, length consumed) tuple
+    if not final:
+      # only output exact multiples of 3-bytes => no padding
+      len_to_write = 3 * (len(input) / 3)
+    else:
+      len_to_write = len(input)
+    return (Base64WSEncode(input[:len_to_write]), len_to_write)
+
+  def encode(self, input, final=False):
+    """
+    Encodes input and returns the resulting object.
+    Note that unless final is True the returned data may not encode all the
+    supplied input as it encodes the maximum length that will not result in
+    padding. The remaining data is buffered for subsequent calls to encode().
+
+    @param input: string to encode as Base64
+    @type input: string
+
+    @param final: force all data to be encoded, possibly resulting in padding
+    #type final: boolean
+
+    @return: (Base64 representation of input, length consumed)
+    @rtype: tuple
+    """
+    result = super(BufferedIncrementalBase64WSEncoder, self).encode(input,
+                                                                  final=final)
+    return (result, len(input) - len(self.buffer))
+
+  def flush(self):
+    """
+    Flush this encoder, returning any buffered data
+
+    @return: Base64 representation of buffered data
+    @rtype: string
+    """
+    result = ('', 0)
+    if self.buffer:
+      result = self._buffer_encode(self.buffer, self.errors, True)
+      self.buffer = ''
+    return result[0]
+
+class IncrementalBase64WSStreamWriter(codecs.StreamWriter, object):
+
+  """
+  Web-safe Base64 encodes a stream in multiple steps to an output stream. Each
+  step bar the final one will be sized to ensure no Base64 padding is required.
+  Any unencoded data outside this optimal size will be buffered and output when
+  flush() is called.
+
+  """
+  def __init__(self, stream, errors='strict'):
+    """ 
+    Creates an IncrementalBase64WSStreamWriter instance.
+
+    @param stream: a file-like object open for writing (binary) data.
+
+    @param errors: required error handling scheme
+
+    The reader may use different error handling
+    schemes by providing the errors keyword argument. These
+    parameters are predefined:
+
+     'strict' - raise a ValueError (or a subclass)
+     'ignore' - ignore the character and continue with the next
+     'replace'- replace with a suitable replacement character
+     'xmlcharrefreplace' - Replace with the appropriate XML
+                           character reference.
+     'backslashreplace'  - Replace with backslashed escape
+                           sequences (only for encoding).
+
+    """
+    super(IncrementalBase64WSStreamWriter, self).__init__(stream, errors)
+    self.encoder = BufferedIncrementalBase64WSEncoder(errors=errors)
+
+  def close(self):
+    """ Flushes and closes the stream """
+    self.flush()
+    super(IncrementalBase64WSStreamWriter, self).close()
+
+  def flush(self):
+    """
+    Flush this stream, writing any buffered data to the output stream
+    """
+    result = self.encoder.flush()
+    if result:
+      self.stream.write(result)
+      self.stream.flush()
+
+  def encode(self, input, errors='strict'):
+    """
+    Base64 Encodes input and returns the resulting object.
+
+    @param input: string to encode as Base64
+    @type input: string
+
+    @param errors: required error handling scheme (see __init__)
+
+    @return: Base64 representation of input.
+    @rtype: string
+    """
+    return self.encoder.encode(input)
+
+class BufferedIncrementalBase64WSDecoder(codecs.BufferedIncrementalDecoder):
+
+  """
+  Web-safe Base64 decodes an input in multiple steps. Each step bar the final
+  one will be sized to a length so that no Base64 padding is required. Any
+  undecoded data outside this optimal size will be buffered.
+  """
+
+  def _buffer_decode(self, input, errors, final):
+    """
+    Decodes input and returns the resulting object, buffering any data that is
+    beyond the optimal no-padding length unless final is True
+    Implementation of abstract method in parent.
+
+    @param input: string to decode from Base64
+    @type input: string
+
+    @param errors: required error handling scheme (see
+    IncrementalBase64WSStreamReader)
+
+    @param final: force all data to be decoded, possibly resulting in padding
+    #type final: boolean
+
+    @return: (plaintext version of input, length consumed)
+    @rtype: tuple
+    """
+    if not final:
+      # only output exact multiples of 4-bytes => no padding
+      len_to_read = 4 * (len(input) / 4)
+    else:
+      len_to_read = len(input)
+    return (Base64WSDecode(input[:len_to_read]), len_to_read)
+
+  def decode(self, input, final=False):
+    """
+    Decodes input and returns the resulting object.
+    Note that unless final is True the returned data may not decode all the
+    supplied input as it uses the maximum length that would not require padding.
+    The remaining data is buffered for subsequent calls to decode().
+
+    @param input: string to decode from Base64
+    @type input: string
+
+    @param final: force all data to be decoded, possibly resulting in padding
+    #type final: boolean
+
+    @return: plaintext representation of input.
+    @rtype: string
+    """
+    result = super(BufferedIncrementalBase64WSDecoder, self).decode(input,
+                                                                  final=final)
+    return (result, len(input))
+
+  def flush(self):
+    """
+    Flush this decoder, returning any buffered data
+
+    @return: plaintext representation of buffered data
+    @rtype: string
+    """
+    result = ('', 0)
+    if self.buffer:
+      result = self._buffer_decode(self.buffer, self.errors, True)
+      self.buffer = ''
+    return result[0]
+
+class IncrementalBase64WSStreamReader(codecs.StreamReader, object):
+
+  """
+  Web-safe Base64 decodes a stream in multiple steps. Each step bar the final
+  one will be sized to a length so that no Base64 padding is required. Any
+  undecoded data outside this optimal size will be buffered and decoded on a
+  final call to read().
+  """
+
+  def __init__(self, stream, errors='strict'):
+    """ 
+    Creates an IncrementalBase64WSStreamReader instance.
+
+    @param stream: a file-like object open for reading (binary) data.
+
+    @param errors: required error handling scheme
+
+    The reader may use different error handling
+    schemes by providing the errors keyword argument. These
+    parameters are predefined:
+
+     'strict' - raise a ValueError (or a subclass)
+     'ignore' - ignore the character and continue with the next
+     'replace'- replace with a suitable replacement character
+     'xmlcharrefreplace' - Replace with the appropriate XML
+                           character reference.
+     'backslashreplace'  - Replace with backslashed escape
+                           sequences (only for encoding).
+
+    """
+    super(IncrementalBase64WSStreamReader, self).__init__(stream, errors)
+    self.decoder = BufferedIncrementalBase64WSDecoder(errors=errors)
+
+  def read(self, size=-1, chars=-1, firstline=False):
+    """ 
+    Decodes data from the input stream and returns the resulting object.
+
+    @param chars: the number of characters to read from the stream. read() will
+    never return more than chars characters, but it might return less, if there
+    are not enough characters available.
+    Will return None if the underlying stream does i.e. is non-blocking and no
+    data is available.
+    @type chars: integer
+
+    @param size: indicates the approximate maximum number of bytes to read from
+    the stream for decoding purposes. The decoder can modify this setting as
+    appropriate. The default value -1 indicates to read and decode as much as
+    possible.  size is intended to prevent having to decode huge files in one
+    step.
+    @type size: integer
+
+    @param firstline: if firstline is true, and a UnicodeDecodeError happens
+    after the first line terminator in the input only the first line will be
+    returned, the rest of the input will be kept until the next call to read().
+    @type firstline: boolean
+
+    @return: plaintext representation of input. Returns an empty string when the
+    end of the input data has been reached.
+    @rtype: string
+    """
+    
+    # NOTE: this is a copy of the code from Python v2.7 codecs.py tweaked to
+    # handle non-blocking streams i.e. those that return None to indicate no
+    # data is available but is not at EOF - see read() in the Python I/O module
+    # documentation.
+
+    # === start of codecs.py code ===
+    # If we have lines cached, first merge them back into characters
+    if self.linebuffer:
+      self.charbuffer = "".join(self.linebuffer)
+      self.linebuffer = None
+
+    # read until we get the required number of characters (if available)
+    newdata = ''
+    while True:
+      # can the request can be satisfied from the character buffer?
+      if chars < 0:
+        if size < 0:
+          if self.charbuffer:
+            break
+        elif len(self.charbuffer) >= size:
+          break
+      else:
+        if len(self.charbuffer) >= chars:
+          break
+
+      # we need more data
+      try:
+        if size < 0:
+          newdata = self.stream.read()
+        else:
+          newdata = self.stream.read(size)
+      except BlockingIOError:
+        newdata = None
+
+      if newdata is not None:
+        # decode bytes (those remaining from the last call included)
+        data = self.bytebuffer + newdata
+        try:
+          newchars, decodedbytes = self.decode(data, self.errors)
+        except UnicodeDecodeError, exc:
+          if firstline:
+            newchars, decodedbytes = self.decode(data[:exc.start], self.errors)
+            lines = newchars.splitlines(True)
+            if len(lines)<=1:
+              raise
+          else:
+            raise
+        # keep undecoded bytes until the next call
+        self.bytebuffer = data[decodedbytes:]
+        # put new characters in the character buffer
+        self.charbuffer += newchars
+        # there was no data available
+        if not newdata:
+          break
+
+    if chars < 0:
+      # Return everything we've got
+      result = self.charbuffer
+      self.charbuffer = ""
+    else:
+      # Return the first chars characters
+      result = self.charbuffer[:chars]
+      self.charbuffer = self.charbuffer[chars:]
+
+    # === end of codecs.py code ===
+    if not result and newdata is None:
+      result = None
+
+    if not result and newdata == '':
+      if chars != 0:
+        result = self.decoder.flush()
+
+    return result
+
+  def decode(self, input, errors='strict'):
+    """
+    Decodes Base64 input and returns the resulting object.
+
+    @param input: string to decode from Base64
+    @type input: string
+
+    @param errors: required error handling scheme (see __init__)
+
+    @return: plaintext representation of input.
+    @rtype: string
+    """
+    return self.decoder.decode(input)
+
+def Memoize(func):
+  """
+  General-purpose memoization decorator.  Handles functions with any number of
+  arguments, including keyword arguments.
+  """
+  memory = {}
+
+  @functools.wraps(func)
+  def memo(*args,**kwargs):
+    pickled_args = cPickle.dumps((args, sorted(kwargs.iteritems())))
+
+    if pickled_args not in memory:
+      memory[pickled_args] = func(*args,**kwargs)
+
+    return memory[pickled_args]
+
+  if memo.__doc__:
+    memo.__doc__ = "\n".join([memo.__doc__,"This function is memoized."])
+  return memo

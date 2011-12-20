@@ -24,9 +24,9 @@ status, purpose, and the cipher mode.
 import errors
 
 class _NameId(object):
-  def __init__(self, name, id):
+  def __init__(self, name, key_id):
     self.name = name
-    self.id = id
+    self.id = key_id
 
   def __str__(self):
     return self.name
@@ -46,8 +46,8 @@ class KeyType(_NameId):
                    doc="""List of valid key sizes for this key type.""")
   # clients can't modify sizes
 
-  def __init__(self, name, id, sizes, output_size):
-    _NameId.__init__(self, name, id)
+  def __init__(self, name, key_id, sizes, output_size):
+    _NameId.__init__(self, name, key_id)
     self.__sizes = sizes
     self.output_size = output_size
     self.default_size = self.__sizes[0]
@@ -121,12 +121,12 @@ class CipherMode(_NameId):
     - Cipher Block Chaining without IV (DET-CBC)
   """
 
-  def __init__(self, name, id, use_iv, OutputSizeFn):
-    _NameId.__init__(self, name, id)
+  def __init__(self, name, key_id, use_iv, OutputSizeFn):
+    _NameId.__init__(self, name, key_id)
     self.use_iv = use_iv
     self.GetOutputSize = OutputSizeFn
 
-CBC = CipherMode("CBC", 0, True, lambda b, i: (i/b + 2) * b)
+CBC = CipherMode("CBC", 0, True, lambda b, i: (i / b + 2) * b)
 CTR = CipherMode("CTR", 1, True, lambda b, i: i + b / 2)
 ECB = CipherMode("ECB", 2, False, lambda b, i: b)
 DET_CBC = CipherMode("DET_CBC", 3, False, lambda b, i: (i / b + 1) * b)
