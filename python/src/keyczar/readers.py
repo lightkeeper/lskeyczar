@@ -41,7 +41,8 @@ def CreateReader(location):
     reader = sc.CreateReader(location)
     if reader:
       return reader
-  raise errors.KeyczarError("Unable to create a reader for %s." % location)
+  raise errors.KeyczarError(
+    "Unable to create a reader for %s. Does the location exist?" % location)
 
 class Reader(object):
   """Interface providing supported methods (no implementation)."""
