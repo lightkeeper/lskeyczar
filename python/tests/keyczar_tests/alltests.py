@@ -27,6 +27,7 @@ import keyczart_test
 import signer_test
 import util_test
 import session_test
+import keys_test
 
 def suite():
   alltests = unittest.TestSuite()
@@ -35,6 +36,7 @@ def suite():
   alltests.addTest(signer_test.suite())
   alltests.addTest(util_test.suite())
   alltests.addTest(session_test.suite())
+  alltests.addTest(keys_test.suite())
   return alltests
 
 if __name__ == '__main__':
