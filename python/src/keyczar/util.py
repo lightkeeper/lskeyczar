@@ -19,7 +19,6 @@ Utility functions for keyczar package.
 
 @author: arkajit.dey@gmail.com (Arkajit Dey)
 """
-
 import base64
 import cPickle
 import codecs
@@ -29,6 +28,8 @@ import os
 import struct
 import warnings
 import sys
+
+from Crypto.Util import number as crypto_number
 
 try:
   # Import hashlib if Python >= 2.5
@@ -207,6 +208,56 @@ def ExportDsaX509(params):
   seq = ASN1Sequence(oid, pubkey)
   return Base64WSEncode(encoder.encode(seq))
 
+# lookup for names of params to export for each key type
+OPENSSH_EXPORTS = {
+  'ssh-rsa': ('publicExponent', 'modulus'),
+  'ssh-dsa': ('p', 'q', 'g', 'y'),
+  }
+
+# lookup for key type names -
+# OpenSSH uses a different key type name to the command line type
+OPENSSH_EXPORT_KEY_TYPES = {
+  'ssh-dsa': 'ssh-dss',
+  }
+
+def ExportOpenSSHPublicKey(key_type, params, comment=None):
+  """
+  Export as a OpenSSH (i.e. ssh-keygen) compatible string
+
+  This is *NOT* an ASN-1 structure as defined in rfc3447,
+  or rfc4716 as described by the ssh-keygen documentation,
+  but is defined as follows:
+
+  An OpenSSH public key line consists of:
+    key-type [base64 encoded string] comment
+
+  This is the format of base64-decoded bytes:
+
+    [string: key type in ASCII ("ssh-rsa"|"ssh-dsa"|"rsa"|"dsa")]
+    (yes, the key type is repeated inside the encoded portion)
+
+    (case RSA key)
+    mpint: public exponent (e)
+    mpint: modulus (n)
+
+    (case DSA key)
+    mpint: p
+    mpint: q
+    mpint: g
+    mpint: y
+  """
+  export_names = OPENSSH_EXPORTS.get(key_type)
+  key_type_name = OPENSSH_EXPORT_KEY_TYPES.get(key_type, key_type)
+  if not export_names:
+    raise ValueError('Key type: %s is unsupported' %key_type)
+  b64Data = base64.encodestring(
+    (PackString(key_type_name) +
+     ''.join([PackMPInt(BytesToLong(params[name])) for name in export_names])
+      )).replace('\n', '')
+  if comment is None:
+    comment = ''
+  return ('%s %s %s' % (key_type_name, b64Data, comment)).strip()
+
 def MakeDsaSig(r, s):
   """
   Given the raw parameters of a DSA signature, return a Base64 signature.
@@ -290,6 +341,23 @@ def IntToBytes(n):
 def BytesToLong(byte_string):
   l = len(byte_string)
   return long(sum([ord(byte_string[i]) * 256**(l - 1 - i) for i in range(l)]))
+
+def PackString(t):
+  """
+  Net string - i.e a packed string (length+bytes)
+  """
+  return struct.pack('!L',len(t)) + t
+
+def PackMPInt(number):
+  """
+  Multi-precision int - i.e. a packed integer (length+byte representation)
+  """
+  if not number: return '\000'*4
+  assert number>0
+  bn = crypto_number.long_to_bytes(number)
+  if ord(bn[0])&128:
+    bn = '\000' + bn
+  return struct.pack('>L',len(bn)) + bn
 
 def Xor(a, b):
   """Return a ^ b as a byte string where a and b are byte strings."""

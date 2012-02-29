@@ -129,10 +129,115 @@ class Base64WSStreamingWriteTest(unittest.TestCase):
       50000))
     self.__testWrite(random_input_data)
 
+class PackTest(unittest.TestCase):
+
+  PackString = staticmethod(util.PackString)
+  PackMPInt = staticmethod(util.PackMPInt)
+
+  def testPackInt(self):
+    self.assertEqual(
+      self.PackMPInt(1),
+      '\x00\x00\x00\x01\x01')
+    self.assertEqual(
+      self.PackMPInt(113),
+      '\x00\x00\x00\x01q')
+
+  def testPackBigInt(self):
+    self.assertEqual(
+      self.PackMPInt(16909060),
+      '\x00\x00\x00\x04\x01\x02\x03\x04')
+    self.assertEqual(
+      self.PackMPInt(16909063),
+      '\x00\x00\x00\x04\x01\x02\x03\x07')
+
+class ExportOpenSSHPublicKeyTest(unittest.TestCase):
+
+  ExportKey = staticmethod(util.ExportOpenSSHPublicKey)
+
+  # This data is taken from the unit tests for Twisted Conch
+  # (the assumption being that it is valid)
+  RSAData = {
+    'n':long('1062486685755247411169438309495398947372127791189432809481'
+             '382072971106157632182084539383569281493520117634129557550415277'
+             '516685881326038852354459895734875625093273594925884531272867425'
+             '864910490065695876046999646807138717162833156501L'),
+    'e':35L,
+    'd':long('6678487739032983727350755088256793383481946116047863373882'
+             '973030104095847973715959961839578340816412167985957218887914482'
+             '713602371850869127033494910375212470664166001439410214474266799'
+             '85974425203903884190893469297150446322896587555L'),
+    'q':long('3395694744258061291019136154000709371890447462086362702627'
+             '9704149412726577280741108645721676968699696898960891593323L'),
+    'p':long('3128922844292337321766351031842562691837301298995834258844'
+             '4720539204069737532863831050930719431498338835415515173887L')}
+
+  publicRSA_openssh = (
+    "ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAGEArzJx8OYOnJmzf4tfBE"
+    "vLi8DVPrJ3/c9k2I/Az64fxjHf9imyRJbixtQhlH9lfNjUIx+4LmrJH5QNRsFporcHDKOTwTTYL"
+    "h5KmRpslkYHRivcJSkbh/C+BR3utDS555mV comment")
+
+  DSAData = {
+    'y':long('2300663509295750360093768159135720439490120577534296730713'
+             '348508834878775464483169644934425336771277908527130096489120714'
+             '610188630979820723924744291603865L'),
+    'g':long('4451569990409370769930903934104221766858515498655655091803'
+             '866645719060300558655677517139568505649468378587802312867198352'
+             '1161998270001677664063945776405L'),
+    'p':long('7067311773048598659694590252855127633397024017439939353776'
+             '608320410518694001356789646664502838652272205440894335303988504'
+             '978724817717069039110940675621677L'),
+    'q':1184501645189849666738820838619601267690550087703L,
+    'x':863951293559205482820041244219051653999559962819L}
+
+  publicDSA_openssh = (
+    "ssh-dss AAAAB3NzaC1kc3MAAABBAIbwTOSsZ7Bl7U1KyMNqV13Tu7"
+    "yRAtTr70PVI3QnfrPumf2UzCgpL1ljbKxSfAi05XvrE/1vfCFAsFYXRZLhQy0AAAAVAM965Akmo"
+    "6eAi7K+k9qDR4TotFAXAAAAQADZlpTW964haQWS4vC063NGdldT6xpUGDcDRqbm90CoPEa2RmNO"
+    "uOqi8lnbhYraEzypYH3K4Gzv/bxCBnKtHRUAAABAK+1osyWBS0+P90u/rAuko6chZ98thUSY2kL"
+    "SHp6hLKyy2bjnT29h7haELE+XHfq2bM9fckDx2FLOSIJzy83VmQ== comment")
+
+  def testHandlesInvalidType(self):
+    self.assertRaises(ValueError, self.ExportKey, 'foo', {})
+
+  def testRSA(self):
+    params = {'publicExponent': util.BigIntToBytes(self.RSAData['e']),
+              'modulus': util.BigIntToBytes(self.RSAData['n'])}
+
+    # check with comment
+    self.assertEqual(self.ExportKey(
+      'ssh-rsa', params, comment='comment'),
+      self.publicRSA_openssh )
+
+    # check with no comment
+    self.assertEqual(self.ExportKey(
+      'ssh-rsa', params),
+      ' '.join(self.publicRSA_openssh.split()[:2])
+    )
+
+  def testDSA(self):
+    params = {'p': util.BigIntToBytes(self.DSAData['p']),
+              'q': util.BigIntToBytes(self.DSAData['q']),
+              'g': util.BigIntToBytes(self.DSAData['g']),
+              'y': util.BigIntToBytes(self.DSAData['y']),
+              }
+
+    # check with comment
+    self.assertEqual(self.ExportKey(
+      'ssh-dsa', params, comment='comment'),
+      self.publicDSA_openssh )
+
+    # check with no comment
+    self.assertEqual(self.ExportKey(
+      'ssh-dsa', params),
+      ' '.join(self.publicDSA_openssh.split()[:2])
+    )
+
 def suite():
   alltests = unittest.TestSuite(
     [unittest.TestLoader().loadTestsFromTestCase(Base64WSStreamingReadTest),
      unittest.TestLoader().loadTestsFromTestCase(Base64WSStreamingWriteTest),
+     unittest.TestLoader().loadTestsFromTestCase(PackTest),
+     unittest.TestLoader().loadTestsFromTestCase(ExportOpenSSHPublicKeyTest),
     ])
 
   return alltests

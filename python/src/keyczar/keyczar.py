@@ -278,6 +278,51 @@ class GenericKeyczar(Keyczar):
     else:
       util.WriteFile(str(pubkmd), os.path.join(dest, "meta"))
 
+  def KeyExport(self, type, dest, public_only=True, write_func=None, **kwargs):
+    """
+    Export the keys corresponding to our key set to destination
+    using the specified format/type.
+    The keys are written to the destination with a filename structured as follows:
+
+    <export_type>_<key_type>_<key_version>[.pub]
+
+    e.g. openssh_rsa_1.pub is the RSA public key in OpenSSH format and
+         openssh_rsa is the RSA private key.
+
+    @param type: the type of export to use, e.g. OpenSSH
+    @param dest: where to export the key
+    @param public_only: if True (default) will only export the public key data
+    otherwise exports public and private if valid to do so.
+    @param write_func: the function to call to write the exported key data
+    defaults to internal 'write_exported_key' which writes to 'dest/file' and sets
+    restricted access (as per ssh)
+   """
+
+    def write_exported_key(exported_key, destination, base_filename, ext, **kwargs):
+      try:
+        pub_key_filename = os.path.join(destination, base_filename + ext)
+        pub_key_file = open(pub_key_filename, 'w', 600)
+        # ensure the mode is set (not always the case in open(), sigh)
+        os.chmod(pub_key_filename, 0600)
+        pub_key_file.writelines(exported_key)
+        pub_key_file.close()
+      except NotImplementedError:
+        pass
+
+    kmd = self.metadata
+    type_str = str(kmd.type).split('_')[0].lower()
+    write_func = write_func or write_exported_key
+    for v in self.versions:
+      if v.status != keyinfo.INACTIVE:
+        base_filename = '%s_%s_%d' %(type.lower(), type_str, v.version_number)
+        curr_key = self.GetKey(v)
+        if hasattr(curr_key, 'public_key'):
+          exported_key = curr_key.public_key.Export(type, **kwargs)
+          write_func(exported_key, dest, base_filename, '.pub', **kwargs)
+        if kmd.type in (keyinfo.DSA_PUB, keyinfo.RSA_PUB) or not public_only:
+          exported_key = curr_key.Export(type, **kwargs)
+          write_exported_key(exported_key, dest, base_filename, '', **kwargs)
+
   def Write(self, writer, encrypter=None):
     """
     Write this key set to the specified location.
