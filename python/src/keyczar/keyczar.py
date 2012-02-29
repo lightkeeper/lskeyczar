@@ -278,6 +278,36 @@ class GenericKeyczar(Keyczar):
     else:
       util.WriteFile(str(pubkmd), os.path.join(dest, "meta"))
 
+  def KeyExport(self, type, dest, public_only=True, **kwargs):
+    """
+    Export the keys corresponding to our key set to destination
+    using the specified format/type.
+    """
+
+    def write_exported_key(key, base_filename, ext, **kwargs):
+      try:
+        exported_key = key.Export(type, **kwargs)
+        pub_key_filename = os.path.join(dest, base_filename + ext)
+        pub_key_file = open(pub_key_filename, 'w', 600)
+        # ensure the mode is set (not always the case in open(), sigh)
+        os.chmod(pub_key_filename, 0600)
+        pub_key_file.writelines(exported_key)
+        pub_key_file.close()
+      except NotImplementedError:
+        pass
+
+    kmd = self.metadata
+    type_str = str(kmd.type).split('_')[0].lower()
+    for v in self.versions:
+      if v.status != keyinfo.INACTIVE:
+        base_filename = '%s_%s_%d' %(type.lower(), type_str, v.version_number)
+        curr_key = self.GetKey(v)
+        if hasattr(curr_key, 'public_key'):
+          write_exported_key(curr_key.public_key, base_filename, '.pub', **kwargs)
+
+        if kmd.type in (keyinfo.DSA_PUB, keyinfo.RSA_PUB) or not public_only:
+          write_exported_key(curr_key, base_filename, '', **kwargs)
+
   def Write(self, writer, encrypter=None):
     """
     Write this key set to the specified location.

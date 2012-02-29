@@ -557,7 +557,7 @@ class CreateReaderTest(unittest.TestCase):
     # Check all non-FileReaders
     for sc in readers.Reader.__subclasses__():
       if not issubclass(sc, readers.FileReader):
-        self.assertTrue(sc.CreateReader(location) is None)
+        self.assertIsNone(sc.CreateReader(location))
 
   def testNewLocationTypeSupported(self):
     class BarReader(readers.Reader):
@@ -639,7 +639,7 @@ def suite():
      unittest.TestLoader().loadTestsFromTestCase(M2CryptoCrypterTest),
      unittest.TestLoader().loadTestsFromTestCase(PyCryptoM2CryptoInteropTest),
      unittest.TestLoader().loadTestsFromTestCase(CreateReaderTest),
-     unittest.TestLoader().loadTestsFromTestCase(CreateWriterTest)
+     unittest.TestLoader().loadTestsFromTestCase(CreateWriterTest),
     ])
 
   return alltests

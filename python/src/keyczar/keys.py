@@ -25,6 +25,9 @@ of base class Key.
 import hmac
 import math
 import random
+import itertools
+import base64
+
 try:
   # Import hashlib if Python >= 2.5
   from hashlib import sha1
@@ -39,13 +42,16 @@ try:
 except ImportError:
   import json
 
+from pyasn1.type import univ as asnUniv
+from pyasn1.codec.ber import encoder as berEncoder
+
 # do we have access to M2Crypto?
 try:
     from M2Crypto import EVP
 except ImportError:
     EVP = None
 
-# overideable crypt library selection
+# overridable crypt library selection
 ACTIVE_CRYPT_LIB = 'm2crypto' if EVP else 'pycrypto'
 
 import errors
@@ -158,6 +164,20 @@ class Key(object):
   def Header(self):
     """Return the 5-byte header string including version byte, 4-byte hash_id."""
     return chr(keyczar.VERSION) + util.Base64WSDecode(self.hash_id)
+
+  def Export(self, type, **kwargs):
+    """
+    Export this key using the format of the specified type.
+
+    The implementation function is looked up using _Export_<type>
+    where type is lowercase
+    """
+    fn = '_Export_%s' %type.lower()
+    if hasattr(self, fn):
+      return getattr(self, fn)(**kwargs)
+    else:
+      raise NotImplementedError(
+        'Key: %s does not support export for the %s type' %(self.__class__, type))
 
 class SymmetricKey(Key):
   """Parent class for symmetric keys such as AES, HMAC-SHA1"""
@@ -631,12 +651,11 @@ class DsaPrivateKey(PrivateKey):
     PrivateKey.__init__(self, keyinfo.DSA_PRIV, params, pub)
     self.key = key
     self.public_key = pub
-    self.params = params
     self.size = size
 
   def __str__(self):
     return json.dumps({"publicKey": json.loads(str(self.public_key)),
-                       "x": util.Base64WSEncode(self.params['x']),
+                       "x": util.Base64WSEncode(self._params['x']),
                        "size": self.size})
 
   @staticmethod
@@ -702,6 +721,33 @@ class DsaPrivateKey(PrivateKey):
     """@see: L{DsaPublicKey.Verify}"""
     return self.public_key.Verify(msg, sig)
 
+  def _Export_openssh(self, **kwargs):
+    """
+    Export as a OpenSSH (i.e. ssh-keygen) compatible string
+
+    @return: byte string formatted as an ASN.1 sequence:
+    @rtype: string
+
+    DSAPrivateKey ::= SEQUENCE {
+      version Version,
+       INTEGER, -- p
+       INTEGER, -- q
+       INTEGER, -- g
+       INTEGER, -- y
+       INTEGER, -- x
+    }
+    """
+    lines = ['-----BEGIN DSA PRIVATE KEY-----',]
+    objData = (0, self.key.p, self.key.q, self.key.g, self.key.y, self.key.x)
+    asn1Sequence = asnUniv.Sequence()
+    for index, value in itertools.izip(itertools.count(), objData):
+      asn1Sequence.setComponentByPosition(index, asnUniv.Integer(value))
+    asn1Data = berEncoder.encode(asn1Sequence)
+    b64Data = base64.encodestring(asn1Data).replace('\n', '')
+    lines += [b64Data[i:i + 64] for i in range(0, len(b64Data), 64)]
+    lines.append('-----END DSA PRIVATE KEY-----')
+    return '\n'.join(lines)
+
 class RsaPrivateKey(PrivateKey):
   """Represents RSA private keys in an asymmetric RSA key pair."""
 
@@ -709,7 +755,6 @@ class RsaPrivateKey(PrivateKey):
     PrivateKey.__init__(self, keyinfo.RSA_PRIV, params, pub)
     self.key = key  # instance of PyCrypto RSA key
     self.public_key = pub  # instance of Keyczar RsaPublicKey
-    self.params = params
     self.size = size
 
   # em - encoded message
@@ -757,12 +802,12 @@ class RsaPrivateKey(PrivateKey):
   def __str__(self):
     return json.dumps({ 
       "publicKey": json.loads(str(self.public_key)),
-      "privateExponent": util.Base64WSEncode(self.params['privateExponent']),
-      "primeP": util.Base64WSEncode(self.params['primeP']),
-      "primeQ": util.Base64WSEncode(self.params['primeQ']),
-      "primeExponentP": util.Base64WSEncode(self.params['primeExponentP']),
-      "primeExponentQ": util.Base64WSEncode(self.params['primeExponentQ']),
-      "crtCoefficient": util.Base64WSEncode(self.params['crtCoefficient']),
+      "privateExponent": util.Base64WSEncode(self._params['privateExponent']),
+      "primeP": util.Base64WSEncode(self._params['primeP']),
+      "primeQ": util.Base64WSEncode(self._params['primeQ']),
+      "primeExponentP": util.Base64WSEncode(self._params['primeExponentP']),
+      "primeExponentQ": util.Base64WSEncode(self._params['primeExponentQ']),
+      "crtCoefficient": util.Base64WSEncode(self._params['crtCoefficient']),
       "size": self.size})
 
   @staticmethod
@@ -813,8 +858,8 @@ class RsaPrivateKey(PrivateKey):
               'crtCoefficient': util.Base64WSDecode(rsa['crtCoefficient'])
               }
 
-    key = RSA.construct((util.BytesToLong(pub.params['modulus']),
-                         util.BytesToLong(pub.params['publicExponent']),
+    key = RSA.construct((util.BytesToLong(pub._params['modulus']),
+                         util.BytesToLong(pub._params['publicExponent']),
                          util.BytesToLong(params['privateExponent']),
                          util.BytesToLong(params['primeQ']),
                          util.BytesToLong(params['primeP']),
@@ -856,6 +901,30 @@ class RsaPrivateKey(PrivateKey):
     """@see: L{RsaPublicKey.Verify}"""
     return self.public_key.Verify(msg, sig)
 
+  def _Export_openssh(self, **kwargs):
+    """
+    Export as a OpenSSH (i.e. ssh-keygen) compatible string
+
+    This is a PKCS1 string as per http://tools.ietf.org/html/rfc3447#appendix-A.1
+
+      RSAPrivateKey ::= SEQUENCE {
+          version           Version,
+          modulus           INTEGER,  -- n
+          publicExponent    INTEGER,  -- e
+          privateExponent   INTEGER,  -- d
+          prime1            INTEGER,  -- p
+          prime2            INTEGER,  -- q
+          exponent1         INTEGER,  -- d mod (p-1)
+          exponent2         INTEGER,  -- d mod (q-1)
+          coefficient       INTEGER,  -- (inverse of q) mod p
+          otherPrimeInfos   OtherPrimeInfos OPTIONAL
+      }
+
+      Why did OpenSSH choose to use the rfc3447 standard for private keys but not for public keys?!
+    """
+    # defer to pyCrypto...
+    return self.key.exportKey()
+
 class DsaPublicKey(PublicKey):
 
   """Represents DSA public keys in an asymmetric DSA key pair."""
@@ -863,14 +932,13 @@ class DsaPublicKey(PublicKey):
   def __init__(self, params, key, size=keyinfo.DSA_PUB.default_size):
     PublicKey.__init__(self, keyinfo.DSA_PUB, params)
     self.key = key
-    self.params = params
     self.size = size
 
   def __str__(self):
-    return json.dumps({"p": util.Base64WSEncode(self.params['p']),
-                       "q": util.Base64WSEncode(self.params['q']),
-                       "g": util.Base64WSEncode(self.params['g']),
-                       "y": util.Base64WSEncode(self.params['y']),
+    return json.dumps({"p": util.Base64WSEncode(self._params['p']),
+                       "q": util.Base64WSEncode(self._params['q']),
+                       "g": util.Base64WSEncode(self._params['g']),
+                       "y": util.Base64WSEncode(self._params['y']),
                        "size": self.size})
 
   def _Hash(self):
@@ -924,13 +992,20 @@ class DsaPublicKey(PublicKey):
       # if signature is not in correct format
       return False
 
+  def _Export_openssh(self, **kwargs):
+    """
+    Export as a OpenSSH (i.e. ssh-keygen) compatible string
+
+    """
+    comment = kwargs.get('comment', '')
+    return util.ExportOpenSSHPublicKey('ssh-dsa', self._params, comment=comment)
+
 class RsaPublicKey(PublicKey):
   """Represents RSA public keys in an asymmetric RSA key pair."""
 
   def __init__(self, params, key, size=keyinfo.RSA_PUB.default_size):
     PublicKey.__init__(self, keyinfo.RSA_PUB, params)
     self.key = key
-    self.params = params
     self.size = size
 
   def __Encode(self, msg, label=""):
@@ -959,8 +1034,8 @@ class RsaPublicKey(PublicKey):
 
   def __str__(self):
     return json.dumps(
-      {"modulus": util.Base64WSEncode(self.params['modulus']),
-       "publicExponent": util.Base64WSEncode(self.params['publicExponent']),
+      {"modulus": util.Base64WSEncode(self._params['modulus']),
+       "publicExponent": util.Base64WSEncode(self._params['publicExponent']),
        "size": self.size})
 
   def _Hash(self):
@@ -1019,6 +1094,14 @@ class RsaPublicKey(PublicKey):
     except ValueError:
       # if sig is not a long, it's invalid
       return False
+
+  def _Export_openssh(self, **kwargs):
+    """
+    Export as a OpenSSH (i.e. ssh-keygen) compatible string
+
+    """
+    comment = kwargs.get('comment', '')
+    return util.ExportOpenSSHPublicKey('ssh-rsa', self._params, comment=comment)
 
 class EncryptingStreamWriter(object):
   """
