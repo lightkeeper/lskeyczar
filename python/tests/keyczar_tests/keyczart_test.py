@@ -228,7 +228,7 @@ class KeyczartTest(unittest.TestCase):
       self.assertEqual(destination, 'bar')
       self.assertEqual(base_filename, 'openssh_dsa_11')
 
-    generic_keyczar.KeyExport('OpenSSH', 'bar', write_func=test_write_key)
+    generic_keyczar.KeyExport('OpenSSH', 'bar', public_only=False, write_func=test_write_key)
 
   def tearDown(self):
     keyczart.mock = None

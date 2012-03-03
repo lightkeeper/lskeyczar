@@ -321,7 +321,7 @@ class GenericKeyczar(Keyczar):
           write_func(exported_key, dest, base_filename, '.pub', **kwargs)
         if kmd.type in (keyinfo.DSA_PUB, keyinfo.RSA_PUB) or not public_only:
           exported_key = curr_key.Export(type, **kwargs)
-          write_exported_key(exported_key, dest, base_filename, '', **kwargs)
+          write_func(exported_key, dest, base_filename, '', **kwargs)
 
   def Write(self, writer, encrypter=None):
     """
