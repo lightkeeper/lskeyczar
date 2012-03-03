@@ -197,6 +197,39 @@ class KeyczartTest(unittest.TestCase):
     expected.sort()
     self.assertEquals(actual, expected)
 
+  def testPluggableWriteExportPublic(self):
+    mock = readers.MockReader('TEST', keyinfo.ENCRYPT, keyinfo.RSA_PRIV)
+    mock.AddKey(21, keyinfo.PRIMARY, 1024)
+    expected_key = mock.keys[21].public_key._Export_openssh()
+    generic_keyczar = keyczar.GenericKeyczar(mock)
+    def test_write_key(exported_key, destination, base_filename, ext, **kwargs):
+      self.assertEqual(exported_key, expected_key)
+      self.assertEqual(destination, 'bar')
+      self.assertEqual(base_filename, 'openssh_rsa_21')
+      self.assertEqual(ext, '.pub')
+    generic_keyczar.KeyExport('OpenSSH', 'bar', write_func=test_write_key)
+
+  def testPluggableWriteExportPublicAndPrivate(self):
+    mock = readers.MockReader('TEST', keyinfo.ENCRYPT, keyinfo.DSA_PRIV)
+    mock.AddKey(11, keyinfo.PRIMARY, 1024)
+    expected_public_key = mock.keys[11].public_key._Export_openssh()
+    expected_private_key = mock.keys[11]._Export_openssh()
+    generic_keyczar = keyczar.GenericKeyczar(mock)
+
+    def test_write_key(exported_key, destination, base_filename, ext, **kwargs):
+      # public key write
+      if exported_key == expected_public_key:
+        self.assertEqual(ext, '.pub')
+      elif exported_key == expected_private_key:
+        self.assertEqual(ext, '')
+      else:
+        self.assertFalse(True, 'Key should either be public or private')
+
+      self.assertEqual(destination, 'bar')
+      self.assertEqual(base_filename, 'openssh_dsa_11')
+
+    generic_keyczar.KeyExport('OpenSSH', 'bar', write_func=test_write_key)
+
   def tearDown(self):
     keyczart.mock = None
 
