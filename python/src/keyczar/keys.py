@@ -37,6 +37,8 @@ except ImportError:
 from Crypto.Cipher import AES
 from Crypto.PublicKey import DSA
 from Crypto.PublicKey import RSA
+from Crypto.Util.asn1 import DerSequence
+from Crypto.PublicKey import pubkey
 try:
   import simplejson as json
 except ImportError:
@@ -921,9 +923,21 @@ class RsaPrivateKey(PrivateKey):
       }
 
       Why did OpenSSH choose to use the rfc3447 standard for private keys but not for public keys?!
+      NOTE: pyCrypto (via self.key.exportKey()) reverses p & q and the resultant exported key does not pass
+      the check with openssl i.e:
+          openssl rsa -check <"RSA private key"
+    ...so we handle the export here
     """
-    # defer to pyCrypto...
-    return self.key.exportKey()
+    der = DerSequence()
+    der[:] = [ 0, self.key.n, self.key.e, self.key.d, self.key.p, self.key.q,
+           self.key.d % (self.key.p-1), self.key.d % (self.key.q-1),
+           pubkey.inverse(self.key.q, self.key.p) ]
+    der_encoded = der.encode()
+    lines = ["-----BEGIN RSA PRIVATE KEY-----",]
+    b64Data = base64.encodestring(der_encoded).replace('\n', '')
+    lines += [b64Data[i:i + 64] for i in range(0, len(b64Data), 64)]
+    lines.append('-----END RSA PRIVATE KEY-----')
+    return '\n'.join(lines)
 
 class DsaPublicKey(PublicKey):
 

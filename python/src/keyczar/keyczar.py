@@ -278,7 +278,7 @@ class GenericKeyczar(Keyczar):
     else:
       util.WriteFile(str(pubkmd), os.path.join(dest, "meta"))
 
-  def KeyExport(self, type, dest, public_only=True, write_func=None, **kwargs):
+  def KeyExport(self, type, dest, primary=True, public_only=True, write_func=None, **kwargs):
     """
     Export the keys corresponding to our key set to destination
     using the specified format/type.
@@ -313,7 +313,8 @@ class GenericKeyczar(Keyczar):
     type_str = str(kmd.type).split('_')[0].lower()
     write_func = write_func or write_exported_key
     for v in self.versions:
-      if v.status != keyinfo.INACTIVE:
+      if ((primary and v.status == keyinfo.PRIMARY) or 
+          (not primary and v.status != keyinfo.INACTIVE)):
         base_filename = '%s_%s_%d' %(type.lower(), type_str, v.version_number)
         curr_key = self.GetKey(v)
         if hasattr(curr_key, 'public_key'):

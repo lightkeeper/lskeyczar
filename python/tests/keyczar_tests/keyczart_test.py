@@ -124,7 +124,7 @@ class KeyczartTest(unittest.TestCase):
   def testNoAESKeyExport(self):
     generic_keyczar = keyczar.GenericKeyczar(self.mock)
     dest = tempfile.mkdtemp()
-    generic_keyczar.KeyExport('OpenSSH', dest)
+    generic_keyczar.KeyExport('OpenSSH', dest, primary=False)
     self.assertEquals(os.listdir(dest), [])
 
   def testSingleRSAKeyExportPublic(self):
@@ -132,7 +132,7 @@ class KeyczartTest(unittest.TestCase):
     mock.AddKey(42, keyinfo.PRIMARY, 1024)
     generic_keyczar = keyczar.GenericKeyczar(mock)
     dest = tempfile.mkdtemp()
-    generic_keyczar.KeyExport('OpenSSH', dest)
+    generic_keyczar.KeyExport('OpenSSH', dest, primary=False)
     self.assertEquals(os.listdir(dest), ['openssh_rsa_42.pub'])
 
   def testSingleRSAKeyExportPublicAndPrivate(self):
@@ -140,7 +140,7 @@ class KeyczartTest(unittest.TestCase):
     mock.AddKey(22, keyinfo.PRIMARY, 1024)
     generic_keyczar = keyczar.GenericKeyczar(mock)
     dest = tempfile.mkdtemp()
-    generic_keyczar.KeyExport('OpenSSH', dest, public_only=False)
+    generic_keyczar.KeyExport('OpenSSH', dest, primary=False, public_only=False)
     actual = os.listdir(dest)
     actual.sort()
     expected = ['openssh_rsa_22.pub', 'openssh_rsa_22']
@@ -155,10 +155,25 @@ class KeyczartTest(unittest.TestCase):
     mock.AddKey(103, keyinfo.INACTIVE, 1024)
     generic_keyczar = keyczar.GenericKeyczar(mock)
     dest = tempfile.mkdtemp()
-    generic_keyczar.KeyExport('OpenSSH', dest, public_only=False)
+    generic_keyczar.KeyExport('OpenSSH', dest, primary=False, public_only=False)
     actual = os.listdir(dest)
     actual.sort()
     expected = ['openssh_rsa_22.pub', 'openssh_rsa_22', 'openssh_rsa_93.pub', 'openssh_rsa_93']
+    expected.sort()
+    self.assertEquals(actual, expected)
+
+  def testMultipleRSAKeyExportPublicAndPrivatePrimaryOnly(self):
+    mock = readers.MockReader('TEST', keyinfo.ENCRYPT, keyinfo.RSA_PRIV)
+    mock.AddKey(13, keyinfo.PRIMARY, 1024)
+    mock.AddKey(15, keyinfo.ACTIVE, 1024)
+    # should be ignored
+    mock.AddKey(19, keyinfo.INACTIVE, 1024)
+    generic_keyczar = keyczar.GenericKeyczar(mock)
+    dest = tempfile.mkdtemp()
+    generic_keyczar.KeyExport('OpenSSH', dest, primary=True, public_only=False)
+    actual = os.listdir(dest)
+    actual.sort()
+    expected = ['openssh_rsa_13.pub', 'openssh_rsa_13', ]
     expected.sort()
     self.assertEquals(actual, expected)
 
@@ -167,7 +182,7 @@ class KeyczartTest(unittest.TestCase):
     mock.AddKey(43, keyinfo.PRIMARY, 1024)
     generic_keyczar = keyczar.GenericKeyczar(mock)
     dest = tempfile.mkdtemp()
-    generic_keyczar.KeyExport('OpenSSH', dest)
+    generic_keyczar.KeyExport('OpenSSH', dest, primary=False)
     self.assertEquals(os.listdir(dest), ['openssh_dsa_43.pub'])
 
   def testSingleDSAKeyExportPublicAndPrivate(self):
@@ -175,7 +190,7 @@ class KeyczartTest(unittest.TestCase):
     mock.AddKey(22, keyinfo.PRIMARY, 1024)
     generic_keyczar = keyczar.GenericKeyczar(mock)
     dest = tempfile.mkdtemp()
-    generic_keyczar.KeyExport('OpenSSH', dest, public_only=False)
+    generic_keyczar.KeyExport('OpenSSH', dest, primary=False, public_only=False)
     actual = os.listdir(dest)
     actual.sort()
     expected = ['openssh_dsa_22.pub', 'openssh_dsa_22']
@@ -190,7 +205,7 @@ class KeyczartTest(unittest.TestCase):
     mock.AddKey(103, keyinfo.INACTIVE, 1024)
     generic_keyczar = keyczar.GenericKeyczar(mock)
     dest = tempfile.mkdtemp()
-    generic_keyczar.KeyExport('OpenSSH', dest, public_only=False)
+    generic_keyczar.KeyExport('OpenSSH', dest, primary=False, public_only=False)
     actual = os.listdir(dest)
     actual.sort()
     expected = ['openssh_dsa_22.pub', 'openssh_dsa_22', 'openssh_dsa_93.pub', 'openssh_dsa_93']
@@ -207,7 +222,7 @@ class KeyczartTest(unittest.TestCase):
       self.assertEqual(destination, 'bar')
       self.assertEqual(base_filename, 'openssh_rsa_21')
       self.assertEqual(ext, '.pub')
-    generic_keyczar.KeyExport('OpenSSH', 'bar', write_func=test_write_key)
+    generic_keyczar.KeyExport('OpenSSH', 'bar', primary=False, write_func=test_write_key)
 
   def testPluggableWriteExportPublicAndPrivate(self):
     mock = readers.MockReader('TEST', keyinfo.ENCRYPT, keyinfo.DSA_PRIV)
@@ -228,7 +243,7 @@ class KeyczartTest(unittest.TestCase):
       self.assertEqual(destination, 'bar')
       self.assertEqual(base_filename, 'openssh_dsa_11')
 
-    generic_keyczar.KeyExport('OpenSSH', 'bar', public_only=False, write_func=test_write_key)
+    generic_keyczar.KeyExport('OpenSSH', 'bar', primary=False, public_only=False, write_func=test_write_key)
 
   def tearDown(self):
     keyczart.mock = None
