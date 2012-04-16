@@ -17,6 +17,18 @@
 package org.keyczar;
 
 
+import com.google.gson.annotations.Expose;
+
+import org.keyczar.enums.KeyType;
+import org.keyczar.enums.RsaPadding;
+import org.keyczar.exceptions.KeyczarException;
+import org.keyczar.exceptions.UnsupportedTypeException;
+import org.keyczar.interfaces.EncryptingStream;
+import org.keyczar.interfaces.SigningStream;
+import org.keyczar.interfaces.Stream;
+import org.keyczar.interfaces.VerifyingStream;
+import org.keyczar.util.Util;
+
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
@@ -30,18 +42,6 @@ import java.security.spec.RSAPublicKeySpec;
 
 import javax.crypto.Cipher;
 import javax.crypto.ShortBufferException;
-
-import org.keyczar.enums.KeyType;
-import org.keyczar.enums.RsaPadding;
-import org.keyczar.exceptions.KeyczarException;
-import org.keyczar.exceptions.UnsupportedTypeException;
-import org.keyczar.interfaces.EncryptingStream;
-import org.keyczar.interfaces.SigningStream;
-import org.keyczar.interfaces.Stream;
-import org.keyczar.interfaces.VerifyingStream;
-import org.keyczar.util.Util;
-
-import com.google.gson.annotations.Expose;
 
 
 /**
@@ -179,7 +179,28 @@ public class RsaPublicKey extends KeyczarPublicKey {
     public int doFinalEncrypt(ByteBuffer input, ByteBuffer output)
         throws KeyczarException {
       try {
-        return cipher.doFinal(input, output);
+        final int ciphertextSize = cipher.getOutputSize(input.limit());
+        final int outputCapacity = output.limit() - output.position();
+
+        ByteBuffer tmpOutput = ByteBuffer.allocate(ciphertextSize);
+        cipher.doFinal(input, tmpOutput);
+
+        if (ciphertextSize == outputCapacity) {
+          output.put(tmpOutput.array());
+
+        } else if (ciphertextSize == (outputCapacity + 1)
+            && tmpOutput.array()[ciphertextSize - 1] == 0) {
+          // There exists at least one JCE (the one IBM ships with some versions of
+          // Websphere) which outputs ciphertext that's one byte too long, appending
+          // a trailing zero.  We need to trim this byte.
+          output.put(tmpOutput.array(), 0, outputCapacity);
+
+        } else {
+          throw new KeyczarException("Expected " + outputCapacity + " bytes from encryption "
+              + "operation but got " + ciphertextSize);
+        }
+
+        return outputCapacity;
       } catch (GeneralSecurityException e) {
         throw new KeyczarException(e);
       }
