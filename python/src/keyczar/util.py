@@ -812,6 +812,8 @@ class IncrementalBase64WSStreamReader(codecs.StreamReader, object):
         # there was no data available
         if not newdata:
           break
+      else:
+        break
 
     if chars < 0:
       # Return everything we've got

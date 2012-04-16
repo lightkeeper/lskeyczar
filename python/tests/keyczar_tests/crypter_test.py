@@ -384,7 +384,7 @@ class BaseCrypterTest(unittest.TestCase):
 
     class PseudoBlockingStream(object):
       """
-      A 'stream' that blocks every 2nd call to read() to simultate blocking i/o
+      A 'stream' that blocks every 2nd call to read() to simulate blocking i/o
       """
 
       def __init__(self, string):
@@ -415,11 +415,64 @@ class BaseCrypterTest(unittest.TestCase):
     result = self.__readFromStream(decryption_stream, len_to_read=-1)
     self.assertEquals(self.input_data, result)
 
-  def testStreamDecryptHandlesIOModuleBlockingExceptionRaised(self):
+  def testStreamDecryptHandlesIOModuleNonBlockingNoneReturned(self):
     """
-    Test for input streams that conform to the blocking I/O module spec wrt
-    buffered blocking, i.e. if the underlying raw stream is in non blocking-mode,
-    a BlockingIOError is raised indicate no data available, but not EOF
+    Test for input streams that conform to the raw non-blocking I/O module spec
+    wrt non-blocking, i.e. if the underlying raw stream is in non blocking-mode,
+    None is returned from read() to indicate no data available, but not EOF
+    """
+    crypter = keyczar.Crypter.Read(os.path.join(TEST_DATA, 'aes'))
+    ciphertext = crypter.Encrypt(self.input_data)
+
+    class PseudoBlockingStream(object):
+      """
+      A 'stream' that returns None every 2nd call to read() to
+      simulate raw blocking
+      """
+
+      def __init__(self, string):
+        self.current_posn = 0
+        self.string = string
+        self.return_none = True
+
+      def read(self, size=-1):
+        result = None
+        start = self.current_posn
+        if not self.return_none:
+          if size < 0:
+            end = size
+            self.current_posn = len(self.string)
+          else:
+            end = (start + size)
+            self.current_posn = end
+          result = self.string[start:end]
+        else:
+          if start > len(self.string):
+            result = ''
+          else:
+            result = None
+
+        self.return_none = not self.return_none
+        return result
+
+    # test when requesting all data
+    decryption_stream = crypter.CreateDecryptingStreamReader(
+      PseudoBlockingStream(ciphertext))
+    result = self.__readFromStream(decryption_stream, len_to_read=-1)
+    self.assertEquals(self.input_data, result)
+
+    # test when requesting small chunks of data
+    decryption_stream = crypter.CreateDecryptingStreamReader(
+      PseudoBlockingStream(ciphertext))
+    result = self.__readFromStream(decryption_stream, len_to_read=2)
+    self.assertEquals(self.input_data, result)
+
+  def testStreamDecryptHandlesIOModuleNonBlockingExceptionRaised(self):
+    """
+    Test for input streams that conform to the buffered non-blocking I/O module
+    spec wrt buffered non-blocking, i.e. if the underlying buffered stream is in
+    non blocking-mode, a BlockingIOError is raised in read() indicate no data
+    available, but not EOF
     """
     crypter = keyczar.Crypter.Read(os.path.join(TEST_DATA, 'aes'))
     ciphertext = crypter.Encrypt(self.input_data)
@@ -427,7 +480,7 @@ class BaseCrypterTest(unittest.TestCase):
     class PseudoBlockingStream(object):
       """
       A 'stream' that raises BlockingIOError every 2nd call to read() to
-      simultate buffered blocking
+      simulate buffered blocking
       """
 
       def __init__(self, string):
@@ -456,9 +509,124 @@ class BaseCrypterTest(unittest.TestCase):
         self.raise_exception = not self.raise_exception
         return result
 
+    # test when requesting all data
     decryption_stream = crypter.CreateDecryptingStreamReader(
       PseudoBlockingStream(ciphertext))
     result = self.__readFromStream(decryption_stream, len_to_read=-1)
+    self.assertEquals(self.input_data, result)
+
+    # test when requesting small chunks of data
+    decryption_stream = crypter.CreateDecryptingStreamReader(
+      PseudoBlockingStream(ciphertext))
+    result = self.__readFromStream(decryption_stream, len_to_read=2)
+    self.assertEquals(self.input_data, result)
+
+  def testStreamDecryptHandlesLessThanRequestedLengthDataReturned(self):
+    """
+    Test for input streams that cannot deliver all the requested length data
+    when read() is called, i.e. the source is slow, paused or blocking.
+    None is returned from read() to indicate no data available, but not EOF
+    """
+    crypter = keyczar.Crypter.Read(os.path.join(TEST_DATA, 'aes'))
+    ciphertext = crypter.Encrypt(self.input_data)
+
+    class PseudoSlowStream(object):
+      """
+      A 'stream' that randomly returns less data than what was requested.
+      """
+
+      def __init__(self, string):
+        self.current_posn = 0
+        self.string = string
+
+      def read(self, size=-1):
+        result = None
+        start = self.current_posn
+        if size < 0:
+          end = size
+          self.current_posn = len(self.string)
+        else:
+          size = random.randint(0, size)
+          if not size:
+            if self.current_posn < len(self.string):
+              return None
+            else:
+              return ''
+          end = (start + size)
+          self.current_posn = end
+
+        result = self.string[start:end]
+        return result
+
+    decryption_stream = crypter.CreateDecryptingStreamReader(
+      PseudoSlowStream(ciphertext))
+    result = self.__readFromStream(decryption_stream, len_to_read=-1)
+    self.assertEquals(self.input_data, result)
+
+    decryption_stream = crypter.CreateDecryptingStreamReader(
+      PseudoSlowStream(ciphertext))
+    result = self.__readFromStream(decryption_stream, len_to_read=2)
+    self.assertEquals(self.input_data, result)
+
+  def testStreamDecryptHandlesBlockedSource(self):
+    """
+    Test for blocked input streams that cannot deliver further data until the
+    read() returns.
+    """
+    crypter = keyczar.Crypter.Read(os.path.join(TEST_DATA, 'aes'))
+    ciphertext = crypter.Encrypt(self.input_data)
+
+    class PseudoBufferingReadWriteStream(object):
+      """
+      A read/write 'stream' that holds only part of the ciphertext
+      """
+
+      def __init__(self, string):
+        self.current_posn = 0
+        self.string = string
+        self.complete = False
+
+      def read(self, size=-1):
+        result = None
+        start = self.current_posn
+        if size < 0:
+          end = size
+          self.current_posn = len(self.string)
+          result = self.string[start:end]
+        else:
+          end = (start + size)
+          if end >= len(self.string):
+            end = len(self.string)
+
+          self.current_posn = end
+          result = self.string[start:end]
+
+          if not result:
+            if not self.complete:
+              result = None 
+            else:
+              result = ''
+        return result
+
+
+      def write(self, data):
+        self.string += data
+
+    source_stream = PseudoBufferingReadWriteStream('')
+    decryption_stream = crypter.CreateDecryptingStreamReader(source_stream)
+
+    result = ''
+    read_data = True
+    while read_data or read_data is None:
+      for c in ciphertext:
+        read_data = decryption_stream.read(1)
+        if read_data:
+          result += read_data
+        elif read_data is None:
+          source_stream.write(c)
+      source_stream.complete = True
+
+    decryption_stream.close()
     self.assertEquals(self.input_data, result)
 
   def tearDown(self):

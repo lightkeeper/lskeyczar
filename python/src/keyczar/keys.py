@@ -1178,6 +1178,8 @@ class DecryptingStreamReader(object):
                                                      block=False)
         if read_bytes:
           self.__encrypted_buffer += read_bytes
+        elif not read_bytes and is_data_avail:
+          break
 
         reserved_data_len = util.HLEN
         if is_data_avail:
@@ -1272,7 +1274,8 @@ class DecryptingStreamReader(object):
     is_data_avail = True
     if not self.__key:
       read_bytes, is_data_avail = self.__ReadBytes(keyczar.HEADER_SIZE -
-                                                   len(self.__encrypted_buffer))
+                                                   len(self.__encrypted_buffer),
+                                                  block=False)
       if read_bytes:
         self.__encrypted_buffer += read_bytes
 
@@ -1295,7 +1298,7 @@ class DecryptingStreamReader(object):
     if not self.__cipher:
       reqd_block_size = self.__key.block_size
       new_bytes_reqd = reqd_block_size - len(self.__encrypted_buffer)
-      read_bytes, is_data_avail = self.__ReadBytes(new_bytes_reqd)
+      read_bytes, is_data_avail = self.__ReadBytes(new_bytes_reqd, block=False)
       if read_bytes:
         self.__encrypted_buffer += read_bytes
       if len(self.__encrypted_buffer) >= reqd_block_size:
