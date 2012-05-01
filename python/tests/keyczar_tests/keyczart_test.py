@@ -94,6 +94,28 @@ class KeyczartTest(unittest.TestCase):
     keyczart.main(['revoke', '--version=99'])
     self.assertFalse(self.mock.ExistsVersion(99))
 
+  def testGenericKeyczarRevoke(self):
+    """Actually test the GenericKeycar.revoke() code"""
+    revoked_version = 99
+    czar = keyczart.CreateGenericKeyczar('this_is_mocked_so_it_is_ignored')
+    self.assertTrue(self.mock.ExistsVersion(revoked_version))
+    pre_revoke_num_versions = len(czar.versions)
+    all_version_nums = [v.version_number for v in czar.versions]
+    self.assertTrue(revoked_version in all_version_nums)
+    revoked_key_hash = None
+    for k in czar.versions:
+      if k.version_number == revoked_version:
+        revoked_key_hash = czar._keys.get(k).hash_id
+        break
+    self.assertTrue(revoked_key_hash is not None)
+    czar.Revoke(revoked_version)
+    # revoke should remove the version number from the _keys mapping
+    self.assertTrue(len(czar.versions) == pre_revoke_num_versions - 1)
+    all_version_nums = [v.version_number for v in czar.versions]
+    self.assertTrue(revoked_version not in all_version_nums)
+    # and it should also remove the hash from the _keys mapping
+    self.assertTrue(czar._keys.get(revoked_key_hash) is None)
+
   def testWriteIsBackwardCompatible(self):
     class MockWriter(writers.Writer):
 

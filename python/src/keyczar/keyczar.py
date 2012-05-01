@@ -250,6 +250,8 @@ class GenericKeyczar(Keyczar):
     version = self.metadata.GetVersion(version_number)
     if version.status == keyinfo.INACTIVE:
       self.metadata.RemoveVersion(version_number)
+      key = self._keys.pop(version)
+      self._keys.pop(key.hash_id)
     else:
       raise errors.KeyczarError("Can't revoke key if not inactive.")
 

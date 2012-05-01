@@ -40,7 +40,7 @@ import javax.crypto.spec.SecretKeySpec;
  * @author arkajit.dey@gmail.com (Arkajit Dey)
  *
  */
-class HmacKey extends KeyczarKey {
+public class HmacKey extends KeyczarKey {
   private static final String MAC_ALGORITHM = "HMACSHA1";
 
   @Expose private final String hmacKeyString;
@@ -72,7 +72,7 @@ class HmacKey extends KeyczarKey {
     initJceKey(Base64Coder.decodeWebSafe(hmacKeyString));
   }
 
-  public void initJceKey(byte[] keyBytes) throws KeyczarException {
+  private void initJceKey(byte[] keyBytes) throws KeyczarException {
     hmacKey = new SecretKeySpec(keyBytes, MAC_ALGORITHM);
     System.arraycopy(Util.hash(keyBytes), 0, hash, 0, hash.length);
   }
