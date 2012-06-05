@@ -115,7 +115,7 @@ class FileWriter(Writer):
     """
     fname = os.path.join(self.location, "meta")
     if not overwrite and os.path.exists(fname):
-        raise errors.KeyczarError("File:%s already exists" %fname)
+      raise errors.KeyczarError("File:%s already exists" %fname)
     util.WriteFile(str(metadata), fname)
     return
   

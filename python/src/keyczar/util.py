@@ -937,20 +937,33 @@ def Memoize(func):
     memo.__doc__ = "\n".join([memo.__doc__,"This function is memoized."])
   return memo
 
+# only check and import from a specific path once
+imported_paths = set()
 def ImportAll(pluginpath):
   """
   Simple plugin importer - imports from the specified subdirectory under the
   util.py directory
 
-  @param subdir: the subdirectory to load from
-  @type subdir: string
+  @param pluginpath: the subdirectory to load from
+  @type pluginpath: string
   """
-  if os.path.exists(pluginpath):
+  if os.path.exists(pluginpath) and pluginpath not in imported_paths:
     pluginfiles = [fname[:-3] for fname in os.listdir(pluginpath) if
                    fname.endswith(".py")]
-    if not pluginpath in sys.path:
-      sys.path.append(pluginpath)
-    imported_modules = [__import__('%s' %(fname)) for fname in pluginfiles]
+    if pluginfiles:
+      pluginpath_inserted = False
+      try:
+        if pluginpath not in sys.path:
+          pluginpath_inserted = True
+          sys.path.insert(0, pluginpath)
+        imported_modules = [__import__('%s' %(fname)) for fname in pluginfiles if
+                            fname not in sys.modules]
+        imported_paths.add(pluginpath)
+      finally:
+        # NOTE: cannot assume it is still the first as the loaded module may
+        # perform some sys.path surgery of its own
+        if pluginpath_inserted:
+          sys.path.remove(pluginpath)
 
 def ImportBackends():
   """
@@ -959,9 +972,12 @@ def ImportBackends():
   'KEYCZAR_BACKEND_PATHS', which can contain >=1 paths joined using the o/s
   """
   pluginpath = os.path.join(os.path.dirname(__file__), 'backends')
-  ImportAll(pluginpath)
+  if pluginpath not in imported_paths:
+    imported_paths.add(pluginpath)
+    ImportAll(pluginpath)
   xtra_paths = os.environ.get(BACKEND_PATHS_ENV_VAR, '')
-  if xtra_paths:
+  if xtra_paths and xtra_paths not in imported_paths:
+    imported_paths.add(xtra_paths)
     for path in xtra_paths.split(os.pathsep):
       ImportAll(path)
 
