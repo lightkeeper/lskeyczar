@@ -24,20 +24,31 @@ import os
 import errors
 import util
 
+_writerLookupCache = {}
+_backendsLoaded = False
+
 def CreateWriter(location):
   """Factory function for Writers
   
     @param location: where (file, uri, etc) the writer should write to
     @type location: string
   """
+  global _writerLookupCache
+  global _backendsLoaded
+  
   # make sure all writers are available
-  util.ImportBackends()
-  for sc in Writer.__subclasses__():
-    writer = sc.CreateWriter(location)
-    if writer:
-      return writer
-  raise errors.KeyczarError(
-    "Unable to create a writer for %s. Does the location exist?" % location)
+  if not _backendsLoaded:
+    util.ImportBackends()
+    _backendsLoaded = True
+  try:
+    return _writerLookupCache[location](location)
+  except KeyError:
+    for sc in Writer.__subclasses__():
+      writer = sc.CreateWriter(location)
+      if writer:
+        _writerLookupCache[location] = sc
+        return writer
+    raise errors.KeyczarError("Unable to create a writer for %s. Does the location exist?" % location)
 
 class Writer(object):
   """Abstract class/interface providing supported methods for writing key sets."""
@@ -115,7 +126,7 @@ class FileWriter(Writer):
     """
     fname = os.path.join(self.location, "meta")
     if not overwrite and os.path.exists(fname):
-        raise errors.KeyczarError("File:%s already exists" %fname)
+      raise errors.KeyczarError("File:%s already exists" %fname)
     util.WriteFile(str(metadata), fname)
     return
   

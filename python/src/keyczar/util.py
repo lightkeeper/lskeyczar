@@ -948,9 +948,11 @@ def ImportAll(pluginpath):
   if os.path.exists(pluginpath):
     pluginfiles = [fname[:-3] for fname in os.listdir(pluginpath) if
                    fname.endswith(".py")]
-    if not pluginpath in sys.path:
-      sys.path.append(pluginpath)
-    imported_modules = [__import__('%s' %(fname)) for fname in pluginfiles]
+    sys.path.insert(0, pluginpath)
+    try:
+        imported_modules = [__import__('%s' %(fname)) for fname in pluginfiles]
+    finally:
+        del sys.path[0]
 
 def ImportBackends():
   """
