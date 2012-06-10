@@ -30,8 +30,6 @@ def CreateWriter(location):
     @param location: where (file, uri, etc) the writer should write to
     @type location: string
   """
-  # make sure all writers are available
-  util.ImportBackends()
   for sc in Writer.__subclasses__():
     writer = sc.CreateWriter(location)
     if writer:

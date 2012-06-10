@@ -34,8 +34,6 @@ def CreateReader(location):
     @param location: where (file, uri, etc) the reader should read from
     @type location: string
   """
-  # make sure all readers are available
-  util.ImportBackends()
   # return the first that accepts the location
   for sc in Reader.__subclasses__():
     reader = sc.CreateReader(location)
