@@ -1271,7 +1271,7 @@ class DecryptingStreamReader(object):
       data_to_decrypt = ''
       need_more_data = True
       while need_more_data:
-        read_bytes, is_data_avail = self.__ReadBytes(self.__key.block_size,
+        read_bytes, is_data_avail = self.__ReadBytes(self.__buffer_size,
                                                      block=False)
         if read_bytes:
           self.__encrypted_buffer += read_bytes
